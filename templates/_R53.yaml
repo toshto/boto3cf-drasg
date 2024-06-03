@@ -1,0 +1,22 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'Route53HostedZone created by cf template'
+
+Parameters:
+  StackName:
+    Type: String
+  DomainName:
+    Type: String
+    Description: 'DomainName for this site'
+
+Resources:
+# Route53
+  Route53HostedZone:
+    Type: "AWS::Route53::HostedZone"
+    Properties:
+      Name: !Sub "${DomainName}."
+
+Outputs:
+  Route53HostedZone:
+    Value: !Ref Route53HostedZone
+    Export:
+      Name: Route53HostedZone

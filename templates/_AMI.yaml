@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'EC2 Image Builder settings created by cf template'
+Parameters:
+  StackName:
+    Type: String
+    Description: 'Cloudformation stack name'
+
+Resources:
+    ImageBuilderImagePipeline:
+        Type: "AWS::ImageBuilder::ImagePipeline"
+        Properties:
+            Name: !Sub "${StackName}_Django_Pipeline"
+            ImageRecipeArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:${AWS::AccountId}:image-recipe/${StackName}-djangoami/1.0.0"
+            InfrastructureConfigurationArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:${AWS::AccountId}:infrastructure-configuration/${StackName}-django-infrastructure"
+            DistributionConfigurationArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:${AWS::AccountId}:distribution-configuration/${StackName}-djangoami"
+            ImageTestsConfiguration:
+                ImageTestsEnabled: true
+                TimeoutMinutes: 720
+            Status: "ENABLED"
+            Tags:
+                StackName: !Ref StackName
+        DependsOn:
+          - ImageBuilderImage
+
+    ImageBuilderImage:
+      Type: "AWS::ImageBuilder::Image"
+      Properties:
+        DistributionConfigurationArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:${AWS::AccountId}:distribution-configuration/${StackName}-djangoami"
+        InfrastructureConfigurationArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:${AWS::AccountId}:infrastructure-configuration/${StackName}-django-infrastructure"
+        ImageRecipeArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:${AWS::AccountId}:image-recipe/${StackName}-djangoami/1.0.0"
+        ImageTestsConfiguration:
+          ImageTestsEnabled: true
+          TimeoutMinutes: 720
+        Tags:
+          StackName: !Ref StackName
+      DependsOn:
+        - ImageBuilderImageRecipe
+        - ImageBuilderInfrastructureConfiguration
+        - ImageBuilderDistributionConfiguration
+
+    ImageBuilderImageRecipe:
+        Type: "AWS::ImageBuilder::ImageRecipe"
+        Properties:
+            Name: !Sub "${StackName}-DjangoAMI"
+            Description: "Django on Amazon Linux2023"
+            Version: "1.0.0"
+            Components:
+              -
+                ComponentArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:aws:component/amazon-cloudwatch-agent-linux/x.x.x"
+              -
+                ComponentArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:aws:component/aws-codedeploy-agent-linux/x.x.x"
+              -
+                ComponentArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:aws:component/aws-cli-version-2-linux/x.x.x"
+              -
+                ComponentArn: !Sub "arn:aws:imagebuilder:${AWS::Region}:aws:component/simple-boot-test-linux/x.x.x"
+            ParentImage: !Sub "arn:aws:imagebuilder:${AWS::Region}:aws:image/amazon-linux-2023-x86/2023.12.15"
+            BlockDeviceMappings:
+              -
+                DeviceName: "/dev/xvda"
+                Ebs:
+                    DeleteOnTermination: true
+                    Encrypted: false
+                    VolumeSize: 8
+                    VolumeType: "gp2"
+            Tags:
+                StackName: !Ref StackName
+            AdditionalInstanceConfiguration:
+              SystemsManagerAgent:
+                UninstallAfterBuild: false
+              UserDataOverride:
+                Fn::Base64:
+                  !Sub |
+                    #!/bin/bash
+                    # For Amazon Linux 2023
+                    timedatectl set-timezone Asia/Tokyo
+                    yum update -y
+                    yum -y groups install 'Development Tools'
+                    yum -y install collectd python3 python3-devel python3-pip mariadb105 mariadb105-devel httpd nfs-utils 
+                  
+                    # Create venv+${StackName}-django environment
+                    mkdir /var/www/mysite
+                    python3 -m venv /var/www/mysite/venv
+                    source /var/www/mysite/venv/bin/activate
+                    pip install boto3 uwsgi mysqlclient django==4.2.9 django-storages pymemcache
+                    chmod -R 750 /var/www/mysite
+                    chown -R apache:apache /var/www/mysite
+
+    ImageBuilderDistributionConfiguration:
+        Type: "AWS::ImageBuilder::DistributionConfiguration"
+        Properties:
+            Name: !Sub "${StackName}-DjangoAMI"
+            Description: "Distribute to Tokyo and Oregon"
+            Distributions:
+              -
+                Region: !Ref AWS::Region
+                AmiDistributionConfiguration:
+                    Name: !Sub "${StackName}-DjangoAMI{{imagebuilder:buildDate}}"
+                    Description: "Distribute to Tokyo and Oregon"
+                    TargetAccountIds:
+                      - !Ref AWS::AccountId
+                    AmiTags:
+                        StackName: !Ref StackName
+              -
+                Region: "us-west-2"
+                AmiDistributionConfiguration:
+                    Name: !Sub "${StackName}-DjangoAMI{{imagebuilder:buildDate}}"
+                    Description: "Distribute to Tokyo and Oregon"
+                    TargetAccountIds:
+                      - !Ref AWS::AccountId
+                    AmiTags:
+                        StackName: !Ref StackName
+            Tags:
+                StackName: !Ref StackName
+
+    ImageBuilderInfrastructureConfiguration:
+        Type: "AWS::ImageBuilder::InfrastructureConfiguration"
+        Properties:
+            Name: !Sub "${StackName}_Django_Infrastructure"
+            InstanceProfileName: "EC2InstanceProfileForImageBuilder"
+            Logging:
+                S3Logs: {}
+            TerminateInstanceOnFailure: true
+            Tags:
+                StackName: !Ref StackName

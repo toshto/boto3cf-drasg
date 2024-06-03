@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'ElastiCache Instances created by cf template'
+
+Parameters:
+  StackName:
+    Type: String
+
+Resources:
+  # for ECA instances
+  SecurityGroupECA:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Security Group for ElastiCache'
+      GroupName: 'ElastiCache'
+      VpcId: !ImportValue VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - { Key: Name, Value: !Sub "ElastiCache-${StackName}" }
+        - { Key: StackName, Value: !Ref StackName }
+  # Entry for SecurityGroupECA
+  ingress401:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref SecurityGroupECA
+      CidrIp: 0.0.0.0/0
+      FromPort: 11211
+      IpProtocol: 'tcp'
+      ToPort: 11211
+  egress401:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref SecurityGroupECA
+      CidrIp: '0.0.0.0/0'
+      IpProtocol: '-1'
+
+  ElastiCacheSubnetGroup:
+    Type: 'AWS::ElastiCache::SubnetGroup'
+    Properties:
+      Description: 'Memcached Subnet Group'
+      CacheSubnetGroupName: !Sub "SubnetGroup-${StackName}"
+      SubnetIds:
+        - !ImportValue SubnetPrvAZa
+        - !ImportValue SubnetPrvAZc
+        - !ImportValue SubnetPrvAZd
+
+  ECAMCInstance:
+    Type: 'AWS::ElastiCache::CacheCluster'
+    Properties:
+      AutoMinorVersionUpgrade: false
+      AZMode: single-az
+      CacheNodeType: 'cache.t2.micro'
+      CacheParameterGroupName: 'default.memcached1.5'
+      CacheSubnetGroupName: !Ref ElastiCacheSubnetGroup
+      ClusterName: !Sub 'memcached-${StackName}'
+      Engine: memcached
+      EngineVersion: '1.5.16'
+      NumCacheNodes: 1
+      Port: 11211
+      PreferredMaintenanceWindow: 'sun:01:30-sun:02:30'
+      VpcSecurityGroupIds:
+        - !Ref SecurityGroupECA
+      Tags:
+        - { Key: Name, Value: !Sub "ElastiCache-${StackName}" }
+        - { Key: StackName, Value: !Ref StackName }

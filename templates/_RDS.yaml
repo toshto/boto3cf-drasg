@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'RDS Instances created by cf template'
+
+Parameters:
+  StackName:
+    Type: String
+    Description: 'Stack Name'
+  MasterUsername:
+    Type: String
+    Description: 'RDS Master User Name'
+  MasterUserPassword:
+    Type: String
+    Description: 'RDS Master User Password'
+  PrimaryRegion:
+    Type: String
+    Description: 'Primary RDS Region'
+
+#
+# Conditions created when "yes"
+#
+Conditions:
+  Primary:
+    !Equals [!Ref PrimaryRegion, 'no']         # PrimaryRegionがnoのとき
+  Secondary:
+    !Not [!Equals [!Ref PrimaryRegion, 'no']]  # PrimaryRegionがno以外のとき
+
+Resources:
+  # for RDS instances
+  SecurityGroupRDS:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Security Group for RDS'
+      GroupName: 'DB'
+      VpcId: !ImportValue VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - { Key: Name, Value: !Sub "DB-${StackName}" }
+        - { Key: StackName, Value: !Ref StackName }
+  # Entry for SecurityGroupRDS
+  ingress101:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref SecurityGroupRDS
+      CidrIp: 0.0.0.0/0
+      FromPort: 3306
+      IpProtocol: 'tcp'
+      ToPort: 3306
+  egress101:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref SecurityGroupRDS
+      CidrIp: '0.0.0.0/0'
+      IpProtocol: '-1'
+
+  RDSDBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupName: !Sub 'DBSubnetGroup-${StackName}'
+      DBSubnetGroupDescription: 'Created from the cf templates'
+      SubnetIds:
+        - !ImportValue SubnetPrvAZa
+        - !ImportValue SubnetPrvAZc
+        - !ImportValue SubnetPrvAZd
+
+  RDSDBInstance:
+    Type: AWS::RDS::DBInstance
+    Condition: 'Primary'
+    DeletionPolicy: Delete
+    Properties:
+      DBInstanceIdentifier: !Sub 'DB-${StackName}'
+      DBSubnetGroupName: !Ref RDSDBSubnetGroup
+      DBName: 'myapp'
+      Engine: 'mariadb'
+      EngineVersion: '10.6.16'
+      DBInstanceClass: 'db.t3.micro'  # エンジンとバージョンにより対応するクラスが異なる
+      AllocatedStorage: 20            # General Purpose (SSD) storage (gp2): Must be an integer from 20 to 65536.
+      MaxAllocatedStorage: 1000
+      DBParameterGroupName: !Ref RDSDBParameterGroup
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Ref MasterUserPassword
+      VPCSecurityGroups:
+        - !Ref SecurityGroupRDS
+      StorageType: 'gp2'
+      MultiAZ: true
+      PreferredMaintenanceWindow: 'sun:01:00-sun:01:30'
+      PreferredBackupWindow: '00:00-00:30'
+      BackupRetentionPeriod: 1
+      CopyTagsToSnapshot: true
+      Tags:
+        - { Key: StackName, Value: !Ref StackName }
+
+  RDSDBInstance2:
+    # CRRRのスタンバイ側のインスタンス
+    Type: AWS::RDS::DBInstance
+    Condition: 'Secondary'
+    DeletionPolicy: Delete
+    Properties:
+      DBInstanceIdentifier: !Sub 'DB-${StackName}'
+      DBSubnetGroupName: !Ref RDSDBSubnetGroup
+      SourceDBInstanceIdentifier: !Sub "arn:aws:rds:${PrimaryRegion}:${AWS::AccountId}:db:DB-${StackName}"
+      VPCSecurityGroups:
+        - !Ref SecurityGroupRDS
+      Tags:
+        - { Key: StackName, Value: !Ref StackName }
+
+  RDSDBParameterGroup:
+    # この設定いれてないとDjangoから日本語の挿入不可。
+    Type: "AWS::RDS::DBParameterGroup"
+    Properties:
+      Description: "character_set"
+      Family: "mariadb10.6"
+      Parameters:
+        character_set_client: "utf8mb4"
+        character_set_connection: "utf8mb4"
+        character_set_database: "utf8mb4"
+        character_set_results: "utf8mb4"
+        character_set_server: "utf8mb4"

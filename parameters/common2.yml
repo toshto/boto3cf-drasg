@@ -1,0 +1,24 @@
+#
+# パラメタ：テンプレートのParametersの値を設定します。
+# (共通設定:ディザスタサイト)
+#
+
+# SiteID ... サイト識別子(スタック名)
+SiteID: 'kbn'
+CFBucket: 'https://s3-ap-northeast-1.amazonaws.com/cmn-xxxxxxxx-com'
+# Region(Tokyo)
+Region: 'us-west-2'
+# ドメイン名
+DomainName: 'xxxxxxxx.com'
+
+# システム構築するサブネットを指定する。
+CidrVPC:  '10.1.0.0/16'
+CidrALL:  '10.1.0.0/23'
+# Pubuic: 24ビット に分割し、AZ(a,c,d)で26ビット に分割する。
+CidrPubA: '10.1.0.0/26'
+CidrPubC: '10.1.0.64/26'
+CidrPubD: '10.1.0.128/26'
+# Private: 24ビット に分割し、AZ(a,c,d)で26ビット に分割する。
+CidrPrvA: '10.1.1.0/26'
+CidrPrvC: '10.1.1.64/26'
+CidrPrvD: '10.1.1.128/26'

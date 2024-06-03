@@ -1,0 +1,23 @@
+#
+# パラメタ：テンプレートのParametersの値を設定します。
+# (DjangoアプリをCodeDeployでASGへデプロイできます)
+#
+
+# ホストゾーンを作成する。
+R53: 'yes'
+# 指定した名前のバケットを作成する。
+S3: 'yes'
+# Memcachedインスタンスを作成する。
+ECA: 'no'
+# MariaDBインスタンスを作成する。
+RDS: 'no'
+MasterUsername: 'admin'
+MasterUserPassword: 'REPLACEME'
+# ALB+ASGを作成し、指定したAMIイメージからEC2インスタンスを組み込む。
+ASG: 'yes'
+ImageId: 'ami-0c0b70aeebabfad7f' # DjangoAMI in Tokyo
+
+#comming soon!
+CDN: 'no'
+LMD: 'no'
+EFS: 'no'

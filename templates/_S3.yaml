@@ -1,0 +1,42 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'S3 Bucket created by cf templates'
+Parameters:
+  StackName:
+    Type: String
+  BucketName:
+    Type: String
+    Description: 'Bucket Name for your site'
+
+Resources:
+  # bucket create!
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Ref BucketName
+      Tags:
+        - { Key: StackName, Value: !Ref StackName }
+
+  S3BucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: 'Cloudwatch_log1'
+            Effect: 'Allow'
+            Principal:
+              Service: !Sub 'logs.${AWS::Region}.amazonaws.com'
+            Action:
+              - 's3:GetBucketAcl'
+              - 's3:GetBucketPolicy'
+            Resource:
+              - !Sub 'arn:aws:s3:::${S3Bucket}'
+          - Sid: 'Cloudwatch_log2'
+            Effect: 'Allow'
+            Principal:
+              Service: !Sub 'logs.${AWS::Region}.amazonaws.com'
+            Action:
+              - 's3:PutObject'
+            Resource:
+              - !Sub 'arn:aws:s3:::${S3Bucket}/*'

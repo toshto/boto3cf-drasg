@@ -1,0 +1,764 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Auto scaling group created by cf template'
+Parameters:
+# Public subnet
+  StackName:
+    Type: String
+    Description: 'Cloudformation stack name'
+  ImageId:
+    Type: AWS::EC2::Image::Id
+    Description: 'AMI-ID you wanna use to create instances'
+  HostName:
+    Type: String
+    Description: 'Hostname for your web service'
+  BucketName:
+    Type: String
+    Description: 'BucketName for your site'
+  SSMKey:
+    Type: String
+    Default: 'AmazonCloudWatch-linux'
+    Description: "Systems Manager's Parameter store name"
+#
+# Parameters for Conditions
+#
+  HostedZoneId:
+    Type: String
+    Default: 'no'
+    Description: "HostedZoneId already created"
+#
+# Conditions created when "yes"
+#
+Conditions:
+  Primary:
+    !Equals [!Ref HostedZoneId, 'no']  # "no" のとき
+  Secondary:
+    !Not [!Equals [!Ref HostedZoneId, 'no']]  # "no"でない
+
+Resources:
+#  Route53RecordSet0:
+#    # ALBに解決されるレコードを登録する。（DNSヘルスチェックなし)
+#    Type: 'AWS::Route53::RecordSet'
+#    Properties:
+#      Name: !Sub "${HostName}."
+#      Type: 'A'
+#      AliasTarget:
+#        HostedZoneId: !GetAtt ElasticLoadBalancingV2LoadBalancer.CanonicalHostedZoneID
+#        DNSName: !GetAtt ElasticLoadBalancingV2LoadBalancer.DNSName
+#        EvaluateTargetHealth: false
+#      HostedZoneId: !ImportValue Route53HostedZone
+
+  #
+  # 新規ホストゾーンにリソース追加する場合(プライマリリージョン)
+  #
+  Route53HealthCheck:
+    # DNSヘルスチェックの設定
+    Condition: 'Primary'
+    Type: "AWS::Route53::HealthCheck"
+    Properties:
+        HealthCheckConfig:
+            EnableSNI: true
+            FailureThreshold: 3
+            FullyQualifiedDomainName: !Ref HostName
+            Inverted: false
+            MeasureLatency: false
+            Port: 443
+            RequestInterval: 30
+            ResourcePath: "/hc_dns"
+            Type: "HTTPS"
+
+  Route53RecordSet1:
+    # ALBに解決されるレコードを登録する。(DNSヘルスチェックあり/プライマリ)
+    Type: "AWS::Route53::RecordSet"
+    Condition: 'Primary'
+    Properties:
+        Name: !Sub "${HostName}."
+        Type: "A"
+        SetIdentifier: !Ref AWS::Region
+        Failover: "PRIMARY"
+        HealthCheckId: !Ref Route53HealthCheck
+        AliasTarget:
+            HostedZoneId: !GetAtt ElasticLoadBalancingV2LoadBalancer.CanonicalHostedZoneID
+            DNSName: !GetAtt ElasticLoadBalancingV2LoadBalancer.DNSName
+            EvaluateTargetHealth: true
+        HostedZoneId: !ImportValue Route53HostedZone
+
+  CertificateManagerCertificate1:
+    # ASG-LBに設定するSSL証明書を作成する。
+    Type: "AWS::CertificateManager::Certificate"
+    Condition: 'Primary'
+    Properties:
+      DomainName: !Sub "${HostName}"
+      DomainValidationOptions:
+       - { DomainName: !Sub "${HostName}", HostedZoneId: !ImportValue Route53HostedZone }
+      SubjectAlternativeNames:
+        - !Sub "${HostName}"
+      ValidationMethod: DNS
+
+  #
+  # 既存ホストゾーンにリソース追加する場合(セカンダリリージョンから)
+  #
+  Route53RecordSet2:
+      # ALBに解決されるレコードを登録する。(DNSヘルスチェックあり/セカンダリ)
+      Type: "AWS::Route53::RecordSet"
+      Condition: 'Secondary'
+      Properties:
+          Name: !Sub "${HostName}."
+          Type: "A"
+          SetIdentifier: "us-west-2"
+          Failover: "SECONDARY"
+          AliasTarget:
+              HostedZoneId: !GetAtt ElasticLoadBalancingV2LoadBalancer.CanonicalHostedZoneID
+              DNSName: !GetAtt ElasticLoadBalancingV2LoadBalancer.DNSName
+              EvaluateTargetHealth: true
+          HostedZoneId: !Ref HostedZoneId
+
+  CertificateManagerCertificate2:
+    # ASG-LBに設定するSSL証明書を作成する。
+    Type: "AWS::CertificateManager::Certificate"
+    Condition: 'Secondary'
+    Properties:
+      DomainName: !Sub "${HostName}"
+      DomainValidationOptions:
+        - { DomainName: !Sub "${HostName}", HostedZoneId: !Ref HostedZoneId }
+      SubjectAlternativeNames:
+        - !Sub "${HostName}"
+      ValidationMethod: DNS
+
+  # SecurityGroup for EC2 instances
+  SecurityGroupEC2:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Security Group for EC2 Instance'
+      GroupName: 'Instance'
+      VpcId: !ImportValue VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - { Key: Name, Value: 'Instance' }
+        - { Key: StackName, Value: !Ref StackName }
+
+  # SecurityGroup for ALBs
+  SecurityGroupALB:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: 'Security Group for ALB'
+      GroupName: 'ALB'
+      VpcId: !ImportValue VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - { Key: Name, Value: 'ALB' }
+        - { Key: StackName, Value: !Ref StackName }
+
+  # Entry for SecurityGroupEC2
+  ingress101:
+    # SessonManager から接続する方法もある(インターネット接続 or VPCエンドポイントが必要)。
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref SecurityGroupEC2
+      IpProtocol: TCP
+      FromPort: '22'
+      ToPort: '22'
+      CidrIp: 0.0.0.0/0
+  ingress102:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref SecurityGroupEC2
+      IpProtocol: TCP
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: 0.0.0.0/0
+  egress101:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref SecurityGroupEC2
+      IpProtocol: '-1'
+      CidrIp: 0.0.0.0/0
+
+  # Entry for SecurityGroupALB
+  ingress201:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref SecurityGroupALB
+      IpProtocol: TCP
+      FromPort: '443'
+      ToPort: '443'
+      CidrIp: 0.0.0.0/0
+  ingress202:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref SecurityGroupALB
+      IpProtocol: TCP
+      FromPort: '80'
+      ToPort: '80'
+      CidrIp: 0.0.0.0/0
+  egress201:
+    Type: 'AWS::EC2::SecurityGroupEgress'
+    Properties:
+      GroupId: !Ref SecurityGroupALB
+      IpProtocol: '-1'
+      CidrIp: 0.0.0.0/0
+
+  #
+  # IAMポリシー/IAMロール (ポリシー名/ロール名にリージョン名を入れて、リージョンごとに作成する)
+  #
+  # Naming an IAM resource can cause an unrecoverable error if you reuse the same template in multiple Regions.
+  # To prevent this, we recommend using Fn::Join and AWS::Region to create a Region-specific name, as in the following example:
+  # {"Fn::Join": ["", [{"Ref": "AWS::Region"}, {"Ref": "MyResourceName"}]]}.
+  #
+  IAMManagedPolicy1:
+    # "スタック名-"で始まるS3バケットへのフルアクセス
+    Type: "AWS::IAM::ManagedPolicy"
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::Region}_${StackName}_AmazonS3FullAccess"
+      Path: "/"
+      PolicyDocument: !Sub |
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": "s3:*",
+                    "Resource": "arn:aws:s3:::${BucketName}/*"
+                }
+            ]
+        }
+  IAMManagedPolicy2:
+    # "スタック名-"で始まるSQSリソースへのフルアクセス
+    Type: "AWS::IAM::ManagedPolicy"
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::Region}_${StackName}_AmazonSQSFullAccess"
+      Path: "/"
+      PolicyDocument: !Sub |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Action": "sqs:ListQueues",
+              "Resource": "*"
+            },
+            {
+              "Effect": "Allow",
+              "Action": "sqs:*",
+              "Resource": "arn:aws:sqs:*:${AWS::AccountId}:*-${StackName}"
+            }
+          ]
+        }
+  IAMManagedPolicy3:
+    # CloudWatchLogでEC2インスタンスのログ監視をするためのポリシー
+    Type: "AWS::IAM::ManagedPolicy"
+    Properties:
+      ManagedPolicyName: !Sub "${AWS::Region}_${StackName}_AmazonEC2RoleForSSM"
+      Path: "/"
+      PolicyDocument: !Sub |
+        {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "ssm:DescribeAssociation",
+                        "ssm:GetDeployablePatchSnapshotForInstance",
+                        "ssm:GetDocument",
+                        "ssm:DescribeDocument",
+                        "ssm:GetManifest",
+                        "ssm:GetParameters",
+                        "ssm:ListAssociations",
+                        "ssm:ListInstanceAssociations",
+                        "ssm:PutInventory",
+                        "ssm:PutComplianceItems",
+                        "ssm:PutConfigurePackageResult",
+                        "ssm:UpdateAssociationStatus",
+                        "ssm:UpdateInstanceAssociationStatus",
+                        "ssm:UpdateInstanceInformation"
+                    ],
+                    "Resource": "*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "ssmmessages:CreateControlChannel",
+                        "ssmmessages:CreateDataChannel",
+                        "ssmmessages:OpenControlChannel",
+                        "ssmmessages:OpenDataChannel"
+                    ],
+                    "Resource": "*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "ec2messages:AcknowledgeMessage",
+                        "ec2messages:DeleteMessage",
+                        "ec2messages:FailMessage",
+                        "ec2messages:GetEndpoint",
+                        "ec2messages:GetMessages",
+                        "ec2messages:SendReply"
+                    ],
+                    "Resource": "*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "cloudwatch:PutMetricData"
+                    ],
+                    "Resource": "*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "ec2:DescribeInstanceStatus"
+                    ],
+                    "Resource": "*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "ds:CreateComputer",
+                        "ds:DescribeDirectories"
+                    ],
+                    "Resource": "*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "logs:CreateLogGroup",
+                        "logs:CreateLogStream",
+                        "logs:DescribeLogGroups",
+                        "logs:DescribeLogStreams",
+                        "logs:PutLogEvents"
+                    ],
+                    "Resource": "*"
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "s3:GetBucketLocation",
+                        "s3:PutObject",
+                        "s3:GetObject",
+                        "s3:GetEncryptionConfiguration",
+                        "s3:AbortMultipartUpload",
+                        "s3:ListMultipartUploadParts",
+                        "s3:ListBucket",
+                        "s3:ListBucketMultipartUploads"
+                    ],
+                    "Resource": "arn:aws:s3:::${BucketName}/*"
+                }
+            ]
+        }
+
+  # IAMロール(EC2インスタンスに割り当てる）
+  IAMRoleEC2:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub "${AWS::Region}_${StackName}_EC2InstRole"
+      AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"ec2.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"
+      Description: 'Role for EC2 instances'
+      Path: '/'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/CloudWatchAgentAdminPolicy'       # 【AWS管理ポリシー】CWAgentを使うため。
+        - 'arn:aws:iam::aws:policy/AmazonRDSReadOnlyAccess'          # 【AWS管理ポリシー】AWS-CLIでRDSのエンドポイントを取得するため。
+        - 'arn:aws:iam::aws:policy/AmazonElastiCacheReadOnlyAccess'  # 【AWS管理ポリシー】AWS-CLIでECAのエンドポイントを取得するため。
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'     # 【AWS管理ポリシー】SessionManager を利用する。
+        - !Ref IAMManagedPolicy1
+        - !Ref IAMManagedPolicy2
+        - !Ref IAMManagedPolicy3
+
+  # IAMロール(CodeDeployに割り当てる）
+  IAMRoleDPY:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: !Sub "${AWS::Region}_${StackName}_AWSCodeDeployRole"
+      AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"\",\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"codedeploy.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"
+      Description: "Role for CodeDeploy"
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole"  #【AWS管理ポリシー】
+#
+#  ロードバランサー
+#
+  ElasticLoadBalancingV2LoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Name: !Sub 'ALB2-${StackName}'
+      Scheme: 'internet-facing'
+      Type: 'application'
+      Subnets:
+        - !ImportValue SubnetPubAZa
+        - !ImportValue SubnetPubAZc
+        - !ImportValue SubnetPubAZd
+      SecurityGroups:
+        - !Ref SecurityGroupALB
+      IpAddressType: 'ipv4'
+      LoadBalancerAttributes:
+        - { Key: 'access_logs.s3.enabled', Value: 'false' }
+        - { Key: 'idle_timeout.timeout_seconds', Value: '60' }
+        - { Key: 'deletion_protection.enabled', Value: 'false' }
+        - { Key: 'routing.http2.enabled', Value: 'true'}
+        - { Key: 'routing.http.drop_invalid_header_fields.enabled', Value: 'false' }
+      Tags:
+        - { Key: StackName, Value: !Ref StackName }
+
+  # HTTPsリスナー(ロードバランサにバインドされる。SSL証明書がリージョンごとに異なる)
+  ElasticLoadBalancingV2HTTPSListener1:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Condition: 'Primary'
+    Properties:
+      LoadBalancerArn: !Ref ElasticLoadBalancingV2LoadBalancer
+      Port: 443
+      Protocol: 'HTTPS'
+      SslPolicy: 'ELBSecurityPolicy-2016-08'
+      Certificates:
+        -
+          CertificateArn: !Ref CertificateManagerCertificate1
+      DefaultActions:
+        -
+          TargetGroupArn: !Ref ElasticLoadBalancingV2TargetGroup
+          Type: 'forward'
+
+  # HTTPsリスナー(ロードバランサにバインドされる。SSL証明書がリージョンごとに異なる)
+  ElasticLoadBalancingV2HTTPSListener2:
+    Condition: 'Secondary'
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      LoadBalancerArn: !Ref ElasticLoadBalancingV2LoadBalancer
+      Port: 443
+      Protocol: 'HTTPS'
+      SslPolicy: 'ELBSecurityPolicy-2016-08'
+      Certificates:
+        -
+          CertificateArn: !Ref CertificateManagerCertificate2
+      DefaultActions:
+        -
+          TargetGroupArn: !Ref ElasticLoadBalancingV2TargetGroup
+          Type: 'forward'
+
+#
+# ターゲットグループ
+#
+  ElasticLoadBalancingV2TargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      HealthCheckIntervalSeconds: 20
+      HealthCheckPath: '/hc_elb'
+      Port: 80
+      Protocol: 'HTTP'
+      HealthCheckPort: 'traffic-port'
+      HealthCheckProtocol: 'HTTP'
+      HealthCheckTimeoutSeconds: 5
+      UnhealthyThresholdCount: 2
+      TargetType: 'instance'
+      Matcher:
+        HttpCode: '200'
+      HealthyThresholdCount: 5
+      VpcId: !ImportValue VpcId
+      Name: !Sub 'TG-${StackName}'
+      HealthCheckEnabled: true
+      TargetGroupAttributes:
+        - { Key: 'stickiness.enabled', Value: 'false' }
+        - { Key: 'deregistration_delay.timeout_seconds', Value: '300' }
+        - { Key: 'stickiness.type', Value: 'lb_cookie' }
+        - { Key: 'stickiness.lb_cookie.duration_seconds', Value: '86400' }
+        - { Key: 'slow_start.duration_seconds', Value: '0' }
+        - { Key: 'load_balancing.algorithm.type', Value: 'round_robin' }
+      Tags:
+        - { Key: StackName, Value: !Ref StackName }
+
+  #
+  # オートスケーリンググループ
+  #
+  AutoScalingAutoScalingGroup:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      AutoScalingGroupName: !Sub 'ASG2-${StackName}'
+      LaunchConfigurationName: !Ref AutoScalingLaunchConfiguration
+      # DesiredCapacity と MinSize は同じ数で。
+      DesiredCapacity: 1
+      MinSize: 1
+      MaxSize: 3
+      Cooldown: 120
+      AvailabilityZones:
+        - !Sub '${AWS::Region}a'
+        - !Sub '${AWS::Region}c'
+        - !Sub '${AWS::Region}d'
+      TargetGroupARNs:
+        - !Ref ElasticLoadBalancingV2TargetGroup
+      HealthCheckType: 'ELB'
+      HealthCheckGracePeriod: 300
+      VPCZoneIdentifier:
+#        - !ImportValue SubnetPrvAZa
+#        - !ImportValue SubnetPrvAZc
+#        - !ImportValue SubnetPrvAZd
+        - !ImportValue SubnetPubAZa
+        - !ImportValue SubnetPubAZc
+        - !ImportValue SubnetPubAZd
+      TerminationPolicies:
+        - 'Default'
+      MetricsCollection:
+        # Value of property MetricsCollection must be of type List
+        -
+          Granularity: '1Minute'
+          Metrics:
+            - 'GroupMaxSize'
+            - 'GroupDesiredCapacity'
+            - 'GroupInServiceInstances'
+            - 'GroupPendingInstances'
+            - 'GroupStandbyInstances'
+            - 'GroupTerminatingInstances'
+            - 'GroupTotalInstances'
+      Tags:
+        - { Key: StackName, Value: !Ref StackName, PropagateAtLaunch: true }
+
+  AutoScalingScalingPolicy:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingAutoScalingGroup
+      PolicyType: 'TargetTrackingScaling'
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: 'ASGAverageCPUUtilization'
+        TargetValue: 90 #ターゲットグループの平均CPU使用率が90%以下になるようにスケールアウト/インする。
+        DisableScaleIn: false
+
+  AutoScalingLaunchConfiguration:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Properties:
+      LaunchConfigurationName: !GetAtt ElasticLoadBalancingV2LoadBalancer.LoadBalancerName
+      ImageId: !Ref ImageId
+      KeyName: 'aws2'
+      SecurityGroups:
+        - !Ref SecurityGroupEC2
+      UserData:
+        Fn::Base64:
+          Fn::Sub:
+            - |
+              #!/bin/bash
+
+              # Make httpd health check files
+              TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"` && \
+              curl -H "X-aws-ec2-metadata-token: $TOKEN" -v http://169.254.169.254/latest/meta-data/instance-id > /var/www/html/hc_elb
+              cp -ip /var/www/html/hc_elb /var/www/html/hc_dns
+
+              # Edit httpd.conf and app.conf
+              sed -i -e 's/\(CustomLog \"logs\/access_log\" combined\)/\1 env=!nolog/' /etc/httpd/conf/httpd.conf
+              echo "Include conf/app.conf" >> /etc/httpd/conf/httpd.conf
+              echo 'SetEnvIf User-Agent "ELB-HealthChecker/2.0" nolog' > /etc/httpd/conf/app.conf
+              echo 'SetEnvIf User-Agent "Amazon-Route53-Health-Check-Service*" nolog' >> /etc/httpd/conf/app.conf
+
+              # Start http daemon
+              systemctl restart httpd
+
+              # Start codedeploy agent
+              systemctl restart codedeploy-agent
+
+              # Start CloudWatch Agent(fetch log collect setting from SSM Parameter Store)
+              /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c ssm:${ssmkey} -s
+            - { ssmkey: !Ref SSMKey  }
+      InstanceType: 't2.micro'
+      InstanceMonitoring: true
+      IamInstanceProfile: !Ref IAMInstanceProfile
+      EbsOptimized: false
+      AssociatePublicIpAddress: true # グローバルアドレスを割り当てるかどうか？
+    DependsOn: SSMParameter # パラメタストアから設定情報を取得する。
+
+  IAMInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: '/'
+      InstanceProfileName: !Ref IAMRoleEC2  # EC2の”インスタンスプロファイル名”と割り当てる”ロール名は”同じ名前、かつ、ロールは1つだけ。
+      Roles:
+        - !Ref IAMRoleEC2
+
+  SNSTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      DisplayName: 'Cloudwatch'
+      TopicName: !Sub "Alart_Mail-${StackName}"
+
+#  Subscription:
+#    Type: AWS::SNS::Subscription
+#    Properties:
+#      Endpoint: xxxx@xxxxxx.jp
+#      Protocol: email
+#      TopicArn: !Ref 'SNSTopic'
+
+  CloudWatchAlarm:
+    Type: 'AWS::CloudWatch::Alarm'
+    Properties:
+      AlarmName: !Sub "ScaleupAlart-${StackName}"
+      AlarmDescription: 'スケールアップします。'
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref SNSTopic
+      MetricName: 'CPUUtilization'
+      Namespace: 'AWS/EC2'
+      Statistic: 'Average'
+      Dimensions:
+        - Name: 'AutoScalingGroupName'
+          Value: !Ref AutoScalingAutoScalingGroup
+      Period: 60
+      EvaluationPeriods: 3
+      Threshold: 90
+      ComparisonOperator: 'GreaterThanThreshold'
+      TreatMissingData: 'ignore'
+
+#
+# CodeDeployアプリケーション(アプリケーションASGapp-${StackName}にデプロイを作成してください。)
+#
+  CodeDeployApplication:
+    Type: "AWS::CodeDeploy::Application"
+    Properties:
+      ApplicationName: !Sub "ASGapp-${StackName}"
+      ComputePlatform: "Server"
+
+  CodeDeployDeploymentGroup:
+    Type: "AWS::CodeDeploy::DeploymentGroup"
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: !Sub "ASG-${StackName}"
+      DeploymentConfigName: "CodeDeployDefault.OneAtATime"
+      ServiceRoleArn: !GetAtt IAMRoleDPY.Arn
+      AutoScalingGroups:
+        - !Ref AutoScalingAutoScalingGroup
+      AlarmConfiguration:
+        Enabled: false
+        IgnorePollAlarmFailure: false
+      AutoRollbackConfiguration:
+        Enabled: true
+        Events:
+          - "DEPLOYMENT_FAILURE"
+      DeploymentStyle:
+        DeploymentType: "IN_PLACE" # or "Blue/Green"
+        DeploymentOption: "WITH_TRAFFIC_CONTROL" # or "WITHOUT_TRAFFIC_CONTROL"
+      LoadBalancerInfo:
+        TargetGroupInfoList:
+          - Name: !Sub 'TG-${StackName}'
+
+# Cloudwatch LOG
+# ロググループの作成（各サーバからログを収集する入れもの）
+  LogGroupMessages:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: 'uwsgi_log'
+      RetentionInDays: 1
+  LogGroupAccessLog:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: 'access_log'
+      RetentionInDays: 1
+  LogGroupErrorLog:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: 'error_log'
+      RetentionInDays: 1
+
+  SSMParameter:
+    # 事前にCloudWatchエージェントのウィザードからログ/メトリクス収集の設定を作成します。
+    # json形式の設定をパラメタストアに格納しておくと、エージェントの起動時にパラメタストアから読み込むことができます。
+    # /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-config-wizard
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Ref SSMKey
+      Type: 'String'
+      Value: |
+        {
+          "agent": {
+            "metrics_collection_interval": 60,
+            "run_as_user": "root"
+          },
+          "logs": {
+            "logs_collected": {
+              "files": {
+                "collect_list": [
+                  {
+                    "file_path": "/var/log/httpd/uwsgi.log",
+                    "log_group_name": "uwsgi_log",
+                    "log_stream_name": "{instance_id}"
+                  },
+                  {
+                    "file_path": "/var/log/httpd/access_log",
+                    "log_group_name": "access_log",
+                    "log_stream_name": "{instance_id}"
+                  },
+                  {
+                    "file_path": "/var/log/httpd/error_log",
+                    "log_group_name": "error_log",
+                    "log_stream_name": "{instance_id}"
+                  }
+                ]
+              }
+            }
+          },
+          "metrics": {
+            "append_dimensions": {
+              "AutoScalingGroupName": "${aws:AutoScalingGroupName}",
+              "ImageId": "${aws:ImageId}",
+              "InstanceId": "${aws:InstanceId}",
+              "InstanceType": "${aws:InstanceType}"
+            },
+            "metrics_collected": {
+              "collectd": {
+                "metrics_aggregation_interval": 60
+              },
+              "cpu": {
+                "measurement": [
+                  "cpu_usage_idle",
+                  "cpu_usage_iowait",
+                  "cpu_usage_user",
+                  "cpu_usage_system"
+                ],
+                "metrics_collection_interval": 60,
+                "totalcpu": false
+              },
+              "disk": {
+                "measurement": [
+                  "used_percent",
+                  "inodes_free"
+                ],
+                "metrics_collection_interval": 60,
+                "resources": [
+                  "*"
+                ]
+              },
+              "diskio": {
+                "measurement": [
+                  "io_time",
+                  "write_bytes",
+                  "read_bytes",
+                  "writes",
+                  "reads"
+                ],
+                "metrics_collection_interval": 60,
+                "resources": [
+                  "*"
+                ]
+              },
+              "mem": {
+                "measurement": [
+                  "mem_used_percent"
+                ],
+                "metrics_collection_interval": 60
+              },
+              "netstat": {
+                "measurement": [
+                  "tcp_established",
+                  "tcp_time_wait"
+                ],
+                "metrics_collection_interval": 60
+              },
+              "statsd": {
+                "metrics_aggregation_interval": 60,
+                "metrics_collection_interval": 10,
+                "service_address": ":8125"
+              },
+              "swap": {
+                "measurement": [
+                  "swap_used_percent"
+                ],
+                "metrics_collection_interval": 60
+              }
+            }
+          }
+        }

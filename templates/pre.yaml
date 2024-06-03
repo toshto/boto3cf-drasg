@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Main Stack'
+
+Parameters:
+  SiteID:
+    Type: String
+    Description: "3-letter Site identifier"
+  CFBucket:
+    Type: String
+    Description: "S3 bucket you will upload CloudFormation templates"
+  Region:
+    Type: String
+    Default: 'ap-northeast-1'
+    Description: "Region you will create stack"
+  DomainName:
+    Type: String
+    Description: 'DomainName for this site'
+#
+# Parameters for subnet
+#
+  CidrVPC:
+    Type: String
+    Description: 'CIDR for VPC'
+  CidrALL:
+    Type: String
+    Default: '172.31.0.0/23'
+  CidrPubA:
+    Type: String
+    Default: '172.31.0.0/26'
+  CidrPubC:
+    Type: String
+    Default: '172.31.0.64/26'
+  CidrPubD:
+    Type: String
+    Default: '172.31.0.128/26'
+  CidrPrvA:
+    Type: String
+    Default: '172.31.1.0/26'
+  CidrPrvC:
+    Type: String
+    Default: '172.31.1.64/26'
+  CidrPrvD:
+    Type: String
+    Default: '172.31.1.128/26'
+
+#
+# Parameters for Sub Stacks
+#
+  HostedZoneId:
+    Type: String
+    Default: "no"
+    Description: 'HostedZoneId already created'
+#
+# Parameters for Conditions
+#
+  AMI:
+    Type: String
+    Default: 'no'
+    AllowedValues: [ 'yes', 'no' ]
+  R53:
+    Type: String
+    Default: 'no'
+    AllowedValues: [ 'yes', 'no' ]
+
+#
+# Conditions created when "yes"
+#
+Conditions:
+  AMI:
+    !Equals [!Ref AMI, 'yes']
+  R53:
+    !Equals [!Ref R53, 'yes']
+
+Resources:
+  # VPC: Virtual Private Cloud
+  VPCres:
+    Type: 'AWS::CloudFormation::Stack'
+    Properties:
+      TemplateURL: !Sub "${CFBucket}/templates/_VPC.yaml"
+      #TemplateURL: !Sub "${CFBucket}/templates/_VPCe.yaml"  # VPCエンドポイント
+      Parameters:
+        StackName: !Ref 'AWS::StackName'
+        CidrVPC: !Ref CidrVPC
+        CidrALL: !Ref CidrALL
+        CidrPubA: !Ref CidrPubA
+        CidrPubC: !Ref CidrPubC
+        CidrPubD: !Ref CidrPubD
+        CidrPrvA: !Ref CidrPrvA
+        CidrPrvC: !Ref CidrPrvC
+        CidrPrvD: !Ref CidrPrvD
+
+  # AMI: Amazon Machine Interface
+  AMIres:
+    Type: 'AWS::CloudFormation::Stack'
+    Condition: 'AMI'
+    Properties:
+      TemplateURL: !Sub "${CFBucket}/templates/_AMI.yaml"
+      Parameters:
+        StackName: !Ref 'AWS::StackName'
+
+  # R53: Route53 hosted Zone
+  R53res:
+    Type: 'AWS::CloudFormation::Stack'
+    Condition: 'R53'
+    Properties:
+      TemplateURL: !Sub "${CFBucket}/templates/_R53.yaml"
+      Parameters:
+        StackName: !Ref 'AWS::StackName'
+        DomainName: !Ref DomainName  # ホストゾーンのドメイン名
