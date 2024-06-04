@@ -1,6 +1,5 @@
 使い方
 
-
 以下のようにスクリプトを実行することでCloudFormationスタックを構築します。
 
 	./update_stack.py <パラメタファイル名>
@@ -9,14 +8,14 @@
 ・実行前の準備
 
  このスクリプトは、"AWS API"を使用しています。APIが利用できるようにIAMユーザの設定をしておいてください。
-common.yml(メインサイト用、common2.yml(ディザスタサイト用)に以下のパラメタを設定してください。
+common.yml(メインサイト用)、common2.yml(ディザスタサイト用)に以下のパラメタを設定してください。
 
 	SiteID		任意の文字列です。CloudFormationのスタック名に使います。
 	CFBucket	テンプレートを配備するS3バケットです。事前に作成しておいてください。
 	Region		サイトを構築したいリージョンを指定してください。
 	DomainName	このドメインをRoute53に設定して名前解決に利用します。
 
-パラメタ定義により決定される以下の3つのS3バケット名を事前に作成しておいてください。
+　上述のパラメタ定義により決定される以下の3つのS3バケットを事前に作成しておいてください。
 
 	CFBucket			CloudFormationの資材を格納します。
 	SiteID.Region.DomainName 	デプロイ資材を格納します。メインのリージョンに作成してください。
@@ -80,14 +79,15 @@ common.yml(メインサイト用、common2.yml(ディザスタサイト用)に�
 
 
 2. AMIのイメージIDをパラメタファイルのImageIdに定義してください。
-   他のDNSサーバからRoute53に名前解決を委譲する場合は、名前解決をRoute53に委譲してください。
+   必要に応じてRoute53に名前解決を委譲してください。
 
 3. 東京(メイン)にWebサイト(DBあり)を構築します。
 
 	./update_stack.py parameters/kbn_1_asgdb.yml
 
 
-4. django-drasgプロジェクトにアプリケーションデプロイのサンプルがあります。USAGE.txt をみてデプロイしてください。
+4. django-drasgプロジェクト(https://github.com/toshto/django-drasg)にアプリケーションデプロイのサンプルがあります。
+   USAGE.txt をみてデプロイしてください。
 
 ディザスタサイトを追加する場合
 
