@@ -3,6 +3,8 @@
 # (DjangoアプリをCodeDeployでASGへデプロイできます)
 #
 
+# EC2イメージビルダー（イメージパイプラインを作成する。)
+AMI: 'yes'
 # ホストゾーンを作成する。
 R53: 'yes'
 # 指定した名前のバケットを作成する。
@@ -15,7 +17,7 @@ MasterUsername: 'admin'
 MasterUserPassword: 'REPLACEME'
 # ALB+ASGを作成し、指定したAMIイメージからEC2インスタンスを組み込む。
 ASG: 'yes'
-ImageId: 'ami-0c776625a26d1a0e9' # DjangoAMI in Tokyo
+ImageId: 'ami-040930e87a7db90fa' # DjangoAMI in Tokyo
 
 #comming soon!
 CDN: 'no'
